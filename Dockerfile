@@ -16,6 +16,9 @@ RUN go mod download
 # Copy source
 COPY main.go .
 
+# Copy config file
+COPY config/config.json /build/config/config.json
+
 # Map TARGETARCH to GOARCH and set GOARM for arm/v7
 # TARGETARCH: amd64, arm64, arm
 # TARGETVARIANT: v7 (for arm/v7)
@@ -52,7 +55,12 @@ FROM scratch
 # Copy binary
 COPY --from=builder /build/cert-watcher /cert-watcher
 
+# Copy embedded config file
+COPY --from=builder /build/config/config.json /config/config.json
+
 # Note: USER directive not supported in scratch images
 # Set user via docker-compose or runtime configuration
 
+# Use embedded config file by default, but allow override via command line
 ENTRYPOINT ["/cert-watcher"]
+CMD ["--config", "/config/config.json"]

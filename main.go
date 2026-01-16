@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"errors"
+	"flag"
 	"fmt"
 	"net"
 	"net/http"
@@ -29,6 +30,9 @@ var (
 
 const (
 	defaultCertDir            = "/certs"
+	defaultCACertFile         = "ca.crt"
+	defaultClientCertFile     = "client.crt"
+	defaultClientKeyFile      = "client.key"
 	defaultMosquittoContainer = "eclipse-mosquitto"
 	defaultUpstreamAddr       = ""
 	defaultTLSSNI             = ""
@@ -43,21 +47,28 @@ const (
 )
 
 type Config struct {
-	CertDir            string
-	MosquittoContainer string
-	UpstreamAddr       string
-	TLSSNI             string
-	TLSTimeout         time.Duration
-	CheckInterval      time.Duration
-	StabilityWindow    time.Duration
-	RestartCooldown    time.Duration
-	ExpiryWarnDays     int
-	DockerSock         string
-	EnableTLSProbe     bool
-	EnableRestart      bool
-	LogLevel           string
-	EnableMetrics      bool
-	MetricsPort        string
+	CertDir            string        `json:"cert_dir,omitempty"`
+	CACertFile         string        `json:"ca_cert_file,omitempty"`
+	ClientCertFile     string        `json:"client_cert_file,omitempty"`
+	ClientKeyFile      string        `json:"client_key_file,omitempty"`
+	MosquittoContainer string        `json:"mosquitto_container,omitempty"`
+	UpstreamAddr       string        `json:"upstream_addr,omitempty"`
+	TLSSNI             string        `json:"tls_sni,omitempty"`
+	TLSTimeout         time.Duration `json:"-"`
+	TLSTimeoutStr      string        `json:"tls_timeout,omitempty"`
+	CheckInterval      time.Duration `json:"-"`
+	CheckIntervalStr   string        `json:"check_interval,omitempty"`
+	StabilityWindow    time.Duration `json:"-"`
+	StabilityWindowStr string        `json:"stability_window,omitempty"`
+	RestartCooldown    time.Duration `json:"-"`
+	RestartCooldownStr string        `json:"restart_cooldown,omitempty"`
+	ExpiryWarnDays     int           `json:"expiry_warn_days,omitempty"`
+	DockerSock         string        `json:"docker_sock,omitempty"`
+	EnableTLSProbe     bool          `json:"enable_tls_probe,omitempty"`
+	EnableRestart      bool          `json:"enable_restart,omitempty"`
+	LogLevel           string        `json:"log_level,omitempty"`
+	EnableMetrics      bool          `json:"enable_metrics,omitempty"`
+	MetricsPort        string        `json:"metrics_port,omitempty"`
 }
 
 type CertSet struct {
@@ -214,9 +225,9 @@ func NewWatcher(config *Config) (*Watcher, error) {
 }
 
 func (w *Watcher) findCertFiles() (*CertSet, error) {
-	caCertPath := filepath.Join(w.config.CertDir, "ca.crt")
-	clientCertPath := filepath.Join(w.config.CertDir, "client.crt")
-	clientKeyPath := filepath.Join(w.config.CertDir, "client.key")
+	caCertPath := filepath.Join(w.config.CertDir, w.config.CACertFile)
+	clientCertPath := filepath.Join(w.config.CertDir, w.config.ClientCertFile)
+	clientKeyPath := filepath.Join(w.config.CertDir, w.config.ClientKeyFile)
 
 	// Check if files exist
 	caExists := fileExists(caCertPath)
@@ -638,25 +649,131 @@ func (w *Watcher) checkAndProcess() {
 	w.certSet = certSet
 }
 
-func loadConfig() *Config {
-	config := &Config{
-		CertDir:            getEnv("CERT_DIR", defaultCertDir),
-		MosquittoContainer: getEnv("MOSQUITTO_CONTAINER", defaultMosquittoContainer),
-		UpstreamAddr:       getEnv("UPSTREAM_ADDR", defaultUpstreamAddr),
-		TLSSNI:             getEnv("TLS_SNI", defaultTLSSNI),
-		DockerSock:         getEnv("DOCKER_SOCK", defaultDockerSock),
-		LogLevel:           getEnv("LOG_LEVEL", defaultLogLevel),
-		EnableTLSProbe:     getEnvBool("ENABLE_TLS_PROBE", true),
-		EnableRestart:      getEnvBool("ENABLE_RESTART", true),
+func loadConfigFromFile(filename string) (*Config, error) {
+	data, err := os.ReadFile(filename)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read config file: %w", err)
 	}
 
-	config.TLSTimeout = parseDuration(getEnv("TLS_TIMEOUT", defaultTLSTimeout.String()), defaultTLSTimeout)
-	config.CheckInterval = parseDuration(getEnv("CHECK_INTERVAL", defaultCheckInterval.String()), defaultCheckInterval)
-	config.StabilityWindow = parseDuration(getEnv("STABILITY_WINDOW", defaultStabilityWindow.String()), defaultStabilityWindow)
-	config.RestartCooldown = parseDuration(getEnv("RESTART_COOLDOWN", defaultRestartCooldown.String()), defaultRestartCooldown)
-	config.ExpiryWarnDays = parseInt(getEnv("EXPIRY_WARN_DAYS", fmt.Sprintf("%d", defaultExpiryWarnDays)), defaultExpiryWarnDays)
-	config.EnableMetrics = getEnvBool("ENABLE_METRICS", false)
-	config.MetricsPort = getEnv("METRICS_PORT", defaultMetricsPort)
+	var config Config
+	if err := json.Unmarshal(data, &config); err != nil {
+		return nil, fmt.Errorf("failed to parse config file: %w", err)
+	}
+
+	// Parse duration strings
+	if config.TLSTimeoutStr != "" {
+		config.TLSTimeout = parseDuration(config.TLSTimeoutStr, defaultTLSTimeout)
+	}
+	if config.CheckIntervalStr != "" {
+		config.CheckInterval = parseDuration(config.CheckIntervalStr, defaultCheckInterval)
+	}
+	if config.StabilityWindowStr != "" {
+		config.StabilityWindow = parseDuration(config.StabilityWindowStr, defaultStabilityWindow)
+	}
+	if config.RestartCooldownStr != "" {
+		config.RestartCooldown = parseDuration(config.RestartCooldownStr, defaultRestartCooldown)
+	}
+
+	return &config, nil
+}
+
+func loadConfig() *Config {
+	var config *Config
+
+	// Parse command line flags
+	configFile := flag.String("config", "", "Path to JSON configuration file (optional)")
+	flag.Parse()
+
+	// Load from config file if provided
+	if *configFile != "" {
+		var err error
+		config, err = loadConfigFromFile(*configFile)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: Failed to load config file: %v\n", err)
+			config = &Config{}
+		}
+	} else {
+		config = &Config{}
+	}
+
+	// Set defaults for missing values
+	if config.CertDir == "" {
+		config.CertDir = defaultCertDir
+	}
+	if config.CACertFile == "" {
+		config.CACertFile = defaultCACertFile
+	}
+	if config.ClientCertFile == "" {
+		config.ClientCertFile = defaultClientCertFile
+	}
+	if config.ClientKeyFile == "" {
+		config.ClientKeyFile = defaultClientKeyFile
+	}
+	if config.MosquittoContainer == "" {
+		config.MosquittoContainer = defaultMosquittoContainer
+	}
+	if config.UpstreamAddr == "" {
+		config.UpstreamAddr = defaultUpstreamAddr
+	}
+	if config.TLSSNI == "" {
+		config.TLSSNI = defaultTLSSNI
+	}
+	if config.TLSTimeout == 0 {
+		config.TLSTimeout = defaultTLSTimeout
+	}
+	if config.CheckInterval == 0 {
+		config.CheckInterval = defaultCheckInterval
+	}
+	if config.StabilityWindow == 0 {
+		config.StabilityWindow = defaultStabilityWindow
+	}
+	if config.RestartCooldown == 0 {
+		config.RestartCooldown = defaultRestartCooldown
+	}
+	if config.ExpiryWarnDays == 0 {
+		config.ExpiryWarnDays = defaultExpiryWarnDays
+	}
+	if config.DockerSock == "" {
+		config.DockerSock = defaultDockerSock
+	}
+	if config.LogLevel == "" {
+		config.LogLevel = defaultLogLevel
+	}
+	if config.MetricsPort == "" {
+		config.MetricsPort = defaultMetricsPort
+	}
+
+	// ENV variables always override config file values
+	config.CertDir = getEnv("CERT_DIR", config.CertDir)
+	config.CACertFile = getEnv("CA_CERT_FILE", config.CACertFile)
+	config.ClientCertFile = getEnv("CLIENT_CERT_FILE", config.ClientCertFile)
+	config.ClientKeyFile = getEnv("CLIENT_KEY_FILE", config.ClientKeyFile)
+	config.MosquittoContainer = getEnv("MOSQUITTO_CONTAINER", config.MosquittoContainer)
+	config.UpstreamAddr = getEnv("UPSTREAM_ADDR", config.UpstreamAddr)
+	config.TLSSNI = getEnv("TLS_SNI", config.TLSSNI)
+	config.DockerSock = getEnv("DOCKER_SOCK", config.DockerSock)
+	config.LogLevel = getEnv("LOG_LEVEL", config.LogLevel)
+	config.EnableTLSProbe = getEnvBool("ENABLE_TLS_PROBE", config.EnableTLSProbe)
+	config.EnableRestart = getEnvBool("ENABLE_RESTART", config.EnableRestart)
+	config.EnableMetrics = getEnvBool("ENABLE_METRICS", config.EnableMetrics)
+	config.MetricsPort = getEnv("METRICS_PORT", config.MetricsPort)
+
+	// Parse duration overrides from ENV
+	if envVal := os.Getenv("TLS_TIMEOUT"); envVal != "" {
+		config.TLSTimeout = parseDuration(envVal, config.TLSTimeout)
+	}
+	if envVal := os.Getenv("CHECK_INTERVAL"); envVal != "" {
+		config.CheckInterval = parseDuration(envVal, config.CheckInterval)
+	}
+	if envVal := os.Getenv("STABILITY_WINDOW"); envVal != "" {
+		config.StabilityWindow = parseDuration(envVal, config.StabilityWindow)
+	}
+	if envVal := os.Getenv("RESTART_COOLDOWN"); envVal != "" {
+		config.RestartCooldown = parseDuration(envVal, config.RestartCooldown)
+	}
+	if envVal := os.Getenv("EXPIRY_WARN_DAYS"); envVal != "" {
+		config.ExpiryWarnDays = parseInt(envVal, config.ExpiryWarnDays)
+	}
 
 	return config
 }

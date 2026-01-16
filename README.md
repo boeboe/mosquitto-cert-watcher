@@ -153,15 +153,67 @@ The certificate watcher operates using the following state machine:
 
 ## Configuration
 
-All configuration is done via environment variables.
+Configuration can be provided via:
+1. **JSON config file** (optional, via `--config` flag)
+2. **Environment variables** (always override config file)
 
-### Required Variables
+**Priority order:** Defaults → Config file → Environment variables (ENV always wins)
+
+### Configuration File
+
+You can provide a JSON configuration file using the `--config` flag:
+
+```bash
+./mosquitto-cert-watcher --config /path/to/config.json
+```
+
+An example configuration file with all options is available at `config/config.json`:
+
+```json
+{
+  "cert_dir": "/certs",
+  "ca_cert_file": "ca.crt",
+  "client_cert_file": "client.crt",
+  "client_key_file": "client.key",
+  "mosquitto_container": "eclipse-mosquitto",
+  "upstream_addr": "broker.example.com:8883",
+  "tls_sni": "broker.example.com",
+  "tls_timeout": "5s",
+  "check_interval": "5s",
+  "stability_window": "10s",
+  "restart_cooldown": "300s",
+  "expiry_warn_days": 14,
+  "docker_sock": "/var/run/docker.sock",
+  "enable_tls_probe": true,
+  "enable_restart": true,
+  "log_level": "info",
+  "enable_metrics": false,
+  "metrics_port": "9090"
+}
+```
+
+**Note:** Duration values in JSON must be strings (e.g., `"5s"`, `"300s"`).
+
+### Environment Variables
+
+Environment variables **always override** values from the config file. This allows you to:
+- Use a config file for base configuration
+- Override specific values via ENV for different environments
+- Use ENV-only configuration (no config file needed)
+
+#### Certificate Configuration
 
 - `CERT_DIR`: Directory containing certificates (default: `/certs`)
+- `CA_CERT_FILE`: CA certificate filename (default: `ca.crt`)
+- `CLIENT_CERT_FILE`: Client certificate filename (default: `client.crt`)
+- `CLIENT_KEY_FILE`: Client private key filename (default: `client.key`)
+
+#### Required Variables
+
 - `MOSQUITTO_CONTAINER`: Docker container name to restart (default: `eclipse-mosquitto`)
 - `UPSTREAM_ADDR`: Upstream broker address for TLS probe (e.g., `broker.example.com:8883`)
 
-### Optional Variables
+#### Optional Variables
 
 - `TLS_SNI`: Server Name Indication for TLS (default: extracted from `UPSTREAM_ADDR`)
 - `TLS_TIMEOUT`: TLS handshake timeout (default: `5s`)
@@ -175,6 +227,37 @@ All configuration is done via environment variables.
 - `LOG_LEVEL`: Logging level: `debug`, `info`, `warn`, `error` (default: `info`)
 - `ENABLE_METRICS`: Enable Prometheus metrics endpoint (default: `false`)
 - `METRICS_PORT`: Port for metrics HTTP server (default: `9090`)
+
+### Configuration Examples
+
+**Example 1: Using config file only**
+```bash
+./mosquitto-cert-watcher --config config/config.json
+```
+
+**Example 2: Using ENV variables only**
+```bash
+CERT_DIR=/certs \
+MOSQUITTO_CONTAINER=mosquitto \
+UPSTREAM_ADDR=broker.example.com:8883 \
+./mosquitto-cert-watcher
+```
+
+**Example 3: Config file with ENV overrides**
+```bash
+# Use config file but override specific values
+UPSTREAM_ADDR=production-broker.example.com:8883 \
+LOG_LEVEL=debug \
+./mosquitto-cert-watcher --config config/config.json
+```
+
+**Example 4: Custom certificate filenames**
+```bash
+CA_CERT_FILE=my-ca.pem \
+CLIENT_CERT_FILE=my-client.pem \
+CLIENT_KEY_FILE=my-client-key.pem \
+./mosquitto-cert-watcher
+```
 
 ## Prometheus Metrics
 
@@ -227,11 +310,13 @@ scrape_configs:
 
 The watcher expects the following files in `CERT_DIR`:
 
-- `ca.crt`: CA certificate
-- `client.crt`: Client certificate
-- `client.key`: Client private key
+- CA certificate (default: `ca.crt`, configurable via `CA_CERT_FILE`)
+- Client certificate (default: `client.crt`, configurable via `CLIENT_CERT_FILE`)
+- Client private key (default: `client.key`, configurable via `CLIENT_KEY_FILE`)
 
 All files must exist and be non-empty. The private key is not read for security reasons; only existence and size are checked.
+
+**Note:** Certificate filenames can be customized via environment variables or config file. This allows you to use different naming conventions or multiple certificate sets.
 
 ## Building
 
@@ -266,6 +351,8 @@ docker build -t mosquitto-cert-watcher:latest .
 ## Deployment
 
 ### Docker Compose
+
+You can use either environment variables or mount a config file. Environment variables are shown in this example:
 
 Example `docker-compose.yml`:
 
@@ -305,6 +392,37 @@ services:
     networks:
       - pratexo
 ```
+
+**Alternative: Using config file in Docker Compose**
+
+You can also mount a config file and use the `--config` flag:
+
+```yaml
+version: '3.8'
+
+services:
+  mosquitto-cert-watcher:
+    image: pratexonexus.pratexo.com/mosquitto-cert-watcher:1.0.0
+    container_name: mosquitto-cert-watcher
+    restart: always
+
+    user: "1000:998"
+
+    command: ["--config", "/config/config.json"]
+
+    volumes:
+      - /usr/local/share/ca-certificates/pratexo/rabbitmq:/certs:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./config/config.json:/config/config.json:ro
+
+    ports:
+      - "9090:9090"
+
+    networks:
+      - pratexo
+```
+
+**Note:** Environment variables still override config file values, allowing you to override specific settings per environment.
 
 ### Docker Socket Access
 
