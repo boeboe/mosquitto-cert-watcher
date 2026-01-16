@@ -77,6 +77,9 @@ type CertSet struct {
 	ClientKeyPath  string
 	Hash           string
 	LastModified   time.Time
+	// Cached file contents to avoid re-reading
+	CACertData     []byte
+	ClientCertData []byte
 }
 
 type CertInfo struct {
@@ -253,8 +256,19 @@ func (w *Watcher) findCertFiles() (*CertSet, error) {
 		return nil, fmt.Errorf("certificate files are empty")
 	}
 
+	// Read certificate files once (we don't read the key for security)
+	caCertData, err := os.ReadFile(caCertPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read CA cert from %s: %w", caCertPath, err)
+	}
+
+	clientCertData, err := os.ReadFile(clientCertPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read client cert from %s: %w", clientCertPath, err)
+	}
+
 	// Calculate hash of cert files (excluding key content for security)
-	hash, err := w.calculateCertHash(caCertPath, clientCertPath, clientKeyPath)
+	hash, err := w.calculateCertHash(caCertData, clientCertData, clientKeyPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to calculate cert hash: %w", err)
 	}
@@ -271,6 +285,8 @@ func (w *Watcher) findCertFiles() (*CertSet, error) {
 		ClientKeyPath:  clientKeyPath,
 		Hash:           hash,
 		LastModified:   info.ModTime(),
+		CACertData:     caCertData,
+		ClientCertData: clientCertData,
 	}, nil
 }
 
@@ -287,20 +303,8 @@ func fileNonEmpty(path string) bool {
 	return info.Size() > 0
 }
 
-func (w *Watcher) calculateCertHash(caPath, certPath, keyPath string) (string, error) {
-	// Read CA cert
-	caData, err := os.ReadFile(caPath)
-	if err != nil {
-		return "", err
-	}
-
-	// Read client cert
-	certData, err := os.ReadFile(certPath)
-	if err != nil {
-		return "", err
-	}
-
-	// For key, only use size and mtime (don't read content)
+func (w *Watcher) calculateCertHash(caData, certData []byte, keyPath string) (string, error) {
+	// For key, only use size and mtime (don't read content for security)
 	keyInfo, err := os.Stat(keyPath)
 	if err != nil {
 		return "", err
@@ -315,13 +319,9 @@ func (w *Watcher) calculateCertHash(caPath, certPath, keyPath string) (string, e
 	return hash, nil
 }
 
-func (w *Watcher) parseCertificate(certPath string) (*CertInfo, error) {
-	data, err := os.ReadFile(certPath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read cert: %w", err)
-	}
+func (w *Watcher) parseCertificate(certData []byte) (*CertInfo, error) {
 
-	block, _ := pem.Decode(data)
+	block, _ := pem.Decode(certData)
 	if block == nil {
 		return nil, errors.New("failed to decode PEM certificate")
 	}
@@ -350,21 +350,16 @@ func (w *Watcher) performTLSProbe(certSet *CertSet) error {
 		return nil
 	}
 
-	// Load CA certificate
-	caCertPEM, err := os.ReadFile(certSet.CACertPath)
-	if err != nil {
-		return fmt.Errorf("failed to read CA cert: %w", err)
-	}
-
+	// Load CA certificate (use cached data)
 	caCertPool := x509.NewCertPool()
-	if !caCertPool.AppendCertsFromPEM(caCertPEM) {
-		return errors.New("failed to parse CA certificate")
+	if !caCertPool.AppendCertsFromPEM(certSet.CACertData) {
+		return fmt.Errorf("failed to parse CA certificate from %s", certSet.CACertPath)
 	}
 
 	// Load client certificate
 	cert, err := tls.LoadX509KeyPair(certSet.ClientCertPath, certSet.ClientKeyPath)
 	if err != nil {
-		return fmt.Errorf("failed to load client cert/key: %w", err)
+		return fmt.Errorf("failed to load client cert/key (cert: %s, key: %s): %w", certSet.ClientCertPath, certSet.ClientKeyPath, err)
 	}
 
 	// Configure TLS
@@ -538,8 +533,8 @@ func (w *Watcher) checkAndProcess() {
 		return
 	}
 
-	// Parse certificate
-	certInfo, err := w.parseCertificate(certSet.ClientCertPath)
+	// Parse certificate (use cached data)
+	certInfo, err := w.parseCertificate(certSet.ClientCertData)
 	if err != nil {
 		w.logger.Error("cert", "cert_parse_failed", map[string]interface{}{
 			"error": err.Error(),
