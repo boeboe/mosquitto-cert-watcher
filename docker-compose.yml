@@ -1,0 +1,34 @@
+version: '3.8'
+
+services:
+  mosquitto-cert-watcher:
+    image: pratexonexus.pratexo.com/mosquitto-cert-watcher:1.0.0
+    container_name: mosquitto-cert-watcher
+    restart: always
+
+    user: "1000:998"   # ptx UID : docker GID
+
+    environment:
+      CERT_DIR: /certs
+      MOSQUITTO_CONTAINER: eclipse-mosquitto
+      UPSTREAM_ADDR: broker.example.com:8883
+      TLS_SNI: broker.example.com
+      CHECK_INTERVAL: 5s
+      STABILITY_WINDOW: 10s
+      RESTART_COOLDOWN: 300s
+      EXPIRY_WARN_DAYS: 14
+      ENABLE_TLS_PROBE: "true"
+      ENABLE_RESTART: "true"
+      LOG_LEVEL: info
+      ENABLE_METRICS: "true"
+      METRICS_PORT: "9090"
+
+    ports:
+      - "9090:9090"  # Prometheus metrics endpoint
+
+    volumes:
+      - /usr/local/share/ca-certificates/pratexo/rabbitmq:/certs:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+
+    networks:
+      - pratexo
