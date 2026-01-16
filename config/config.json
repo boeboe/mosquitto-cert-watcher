@@ -1,1 +1,20 @@
-git a
+{
+  "cert_dir": "/certs",
+  "ca_cert_file": "ca.crt",
+  "client_cert_file": "client.crt",
+  "client_key_file": "client.key",
+  "mosquitto_container": "eclipse-mosquitto",
+  "upstream_addr": "",
+  "tls_sni": "",
+  "tls_timeout": "5s",
+  "check_interval": "5s",
+  "stability_window": "10s",
+  "restart_cooldown": "300s",
+  "expiry_warn_days": 14,
+  "docker_sock": "/var/run/docker.sock",
+  "enable_tls_probe": true,
+  "enable_restart": true,
+  "log_level": "info",
+  "enable_metrics": false,
+  "metrics_port": "9090"
+}

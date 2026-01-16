@@ -235,7 +235,17 @@ func (w *Watcher) findCertFiles() (*CertSet, error) {
 	clientKeyExists := fileExists(clientKeyPath)
 
 	if !caExists || !clientCertExists || !clientKeyExists {
-		return nil, fmt.Errorf("certificate files missing: ca=%v, cert=%v, key=%v", caExists, clientCertExists, clientKeyExists)
+		var missing []string
+		if !caExists {
+			missing = append(missing, caCertPath)
+		}
+		if !clientCertExists {
+			missing = append(missing, clientCertPath)
+		}
+		if !clientKeyExists {
+			missing = append(missing, clientKeyPath)
+		}
+		return nil, fmt.Errorf("certificate files missing: %v", missing)
 	}
 
 	// Check if files are non-empty
